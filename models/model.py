@@ -1230,10 +1230,11 @@ class FAST_Module(nn.Module):
     def _prepare_for_attention(self, x_4d):
         """ Chuyển đổi từ (B, C, H, W) sang (B, H*W, C) """
         # (B, D, H, W) -> (B, D, H*W)
+        B, C, H, W = x_4d.shape
         x_3d = x_4d.flatten(start_dim=2)
         # (B, D, H*W) -> (B, H*W, D)
         x_attn = x_3d.transpose(1, 2)
-        return x_attn
+        return x_attn, (B, C, H, W)
     
     def _recover_from_attention(self, x_attn, shape_4d):
         """ Chuyển đổi từ (B, H*W, C) sang (B, C, H, W) """
