@@ -1137,156 +1137,144 @@ class ColorBalancePrior(nn.Module):
         prior = self.enc(x_mean)
 
         return prior
-    
-class FourierSNRGuidedAttention(nn.Module):
- 
-    def __init__(self, d_model):
+
+
+class GuidedMDTA(nn.Module):
+    """
+    Guided Multi-Dconv Head Transposed Attention (MDTA) từ Restormer.
+    Thay đổi: Q được tạo từ SNR feature, K và V được tạo từ RGB feature.
+    """
+    def __init__(self, dim, num_heads):
         super().__init__()
-        self.d_model = d_model
+        self.num_heads = num_heads
+        self.dim = dim
+        self.head_dim = dim // num_heads
+        # Scale parameter có thể học được (thay vì chia cho sqrt(d_k) cố định)
+        self.scale = nn.Parameter(torch.ones(num_heads, 1, 1))
 
-    def fft_op(self, x):
-        """ Thực hiện FFT và tách Biên độ (Amplitude) và Pha (Phase). """
-        # x: (B, Seq_len, D)
-        # Thực hiện FFT trên chiều Seq_len (dim=1)
-        x_fft = torch.fft.fft(x, dim=1)
-        
-        A = torch.abs(x_fft)
-        P = torch.angle(x_fft)
-        return A, P
+        # 1. Projections với Depth-wise Convolution (đặc trưng của Restormer)
+        # Q projection cho SNR
+        self.q_proj = nn.Sequential(
+            nn.Conv2d(dim, dim, 1, bias=False),
+            nn.Conv2d(dim, dim, 3, padding=1, groups=dim, bias=False) # Depth-wise
+        )
+        # K projection cho RGB
+        self.k_proj = nn.Sequential(
+            nn.Conv2d(dim, dim, 1, bias=False),
+            nn.Conv2d(dim, dim, 3, padding=1, groups=dim, bias=False) # Depth-wise
+        )
+        # V projection cho RGB
+        self.v_proj = nn.Sequential(
+            nn.Conv2d(dim, dim, 1, bias=False),
+            nn.Conv2d(dim, dim, 3, padding=1, groups=dim, bias=False) # Depth-wise
+        )
 
-    def ifft_op(self, A, P):
-        """ Tổ hợp lại thành số phức và thực hiện IFFT. """
-        # Tổ hợp thành số phức: Complex = A * exp(j * P)
-        complex_tensor = torch.polar(A, P)
-        # Thực hiện IFFT trên chiều thứ 2 (Seq_len) và chỉ lấy phần thực
-        x_ifft = torch.fft.ifft(complex_tensor, dim=1).real
-        return x_ifft
+        # Output projection
+        self.proj_out = nn.Conv2d(dim, dim, 1, bias=False)
 
-    def forward(self, Q, K):
+    def forward(self, x_rgb, x_snr):
         """
         Args:
-            Q (Tensor): Query từ SNR (B, S, D)
-            K (Tensor): Key từ RGB Feature (B, S, D)
-            V (Tensor): Value từ RGB Feature (B, S, D)
+            x_rgb: (B, C, H, W)
+            x_snr: (B, C, H, W)
         """
-        # 1. FFT và tách Biên độ/Pha
-        # Q (SNR) -> As, Ps
-        As, Ps = self.fft_op(Q)
-        # K (RGB) -> Ax, Px
-        Ax, Px = self.fft_op(K)
+        B, C, H, W = x_rgb.shape
 
-        # 2. Element-wise Multiplication trong miền tần số
-        # A = Ax * As
-        A = Ax * As 
-        # P = Px * Ps 
-        P = Px * Ps 
+        # 1. Tạo Q, K, V
+        q = self.q_proj(x_snr)
+        k = self.k_proj(x_rgb)
+        v = self.v_proj(x_rgb)
 
-        # 3. IFFT về miền không gian
-        F = self.ifft_op(A, P) # F: (B, S, D)
-        
-        # 4. Điều biến (Modulation) với V (element-wise multiplication)
-        # F_output = F * V
-        #F_output = F * V # Ký hiệu (F) trong công thức (4)
-        
-        return F
+        # 2. Reshape để thực hiện Transposed Attention
+        # Chuyển từ (B, C, H, W) -> (B, num_heads, head_dim, H*W)
+        q = q.reshape(B, self.num_heads, self.head_dim, -1)
+        k = k.reshape(B, self.num_heads, self.head_dim, -1)
+        v = v.reshape(B, self.num_heads, self.head_dim, -1)
+
+        # 3. Normalize Q và K (quan trọng cho MDTA để ổn định training)
+        q = F.normalize(q, dim=-1)
+        k = F.normalize(k, dim=-1)
+
+        # 4. Tính Attention Map trên kênh (Channel-wise)
+        # (B, heads, head_dim, HW) @ (B, heads, HW, head_dim) -> (B, heads, head_dim, head_dim)
+        # Kết quả là ma trận tương quan kích thước (head_dim x head_dim)
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+
+        # 5. Áp dụng Attention vào V
+        # (B, heads, head_dim, head_dim) @ (B, heads, head_dim, HW) -> (B, heads, head_dim, HW)
+        out = (attn @ v)
+
+        # 6. Reshape lại về 4D ban đầu
+        out = out.reshape(B, C, H, W)
+
+        # 7. Projection cuối
+        out = self.proj_out(out)
+
+        return out
     
-class FAST_Module(nn.Module):
-    """
-    Khối FAST hoàn chỉnh bao gồm FSA, Layer Norm và MLP, theo công thức (4) và (5).
-    """
-    def __init__(self, ch_in, d_model, dropout=0.1):
-        super().__init__()
-        # Kích thước đầu vào (Kênh) và kích thước embedding (d_model)
-        self.ch_in = ch_in
-        self.d_model = d_model
-        
-        # --- 1. Conv2d Projections (thay cho Linear) ---
-        # Kernel size 1x1 thường được dùng cho phép chiếu không gian
-        kernel_size = 1 
-        
-        # SNR_map (s_i) -> Q (từ C_in -> d_model)
-        self.q_proj = nn.Conv2d(ch_in, d_model, kernel_size=kernel_size)
-        # RGB_feature (x_i) -> K, V (từ C_in -> d_model)
-        self.k_proj = nn.Conv2d(ch_in, d_model, kernel_size=kernel_size)
-        self.v_proj = nn.Conv2d(ch_in, d_model, kernel_size=kernel_size)
-        
-        # 2. Fourier SNR-guided Attention
-        self.fsa = FourierSNRGuidedAttention(d_model)
-        
-        # 3. Layer Normalization (LN)
-        # LN(F · V + x_i) 
-        self.norm1 = nn.LayerNorm(d_model) # Dựa trên x'_i = x_i + LN(F · V)
-        self.norm2 = nn.LayerNorm(d_model)
+class FAST_Module_MDTA(nn.Module):
 
-        # 4. Multi-Layer Perceptron (MLP)
+    def __init__(self, ch_in, d_model, num_heads=8, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+
+        # Input embedding nếu số kênh đầu vào khác d_model
+        self.rgb_embed = nn.Conv2d(ch_in, d_model, 1) if ch_in != d_model else nn.Identity()
+        self.prior_embed = nn.Conv2d(ch_in, d_model, 1) if ch_in != d_model else nn.Identity()
+
+        # 1. Thay thế FourierSNRGuidedAttention bằng GuidedMDTA
+        # Restormer attention hoạt động tốt với Norm trước (Pre-norm) nhưng ở dạng 4D.
+        # Chúng ta có thể dùng LayerNorm 4D hoặc GroupNorm. Restormer gốc dùng LayerNorm nhưng implement đặc biệt cho 4D.
+        # Để đơn giản và tương thích với code cũ của bạn, tôi sẽ dùng một mẹo nhỏ cho LayerNorm 4D.
+        self.norm1 = nn.LayerNorm(d_model) 
+        self.attn = GuidedMDTA(dim=d_model, num_heads=num_heads)
+
+        # 2. Giữ nguyên phần MLP cũ của bạn (hoặc có thể nâng cấp lên GDFN của Restormer)
+        self.norm2 = nn.LayerNorm(d_model)
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model * 4), 
+            nn.Linear(d_model, d_model * 4),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model * 4, d_model),
             nn.Dropout(dropout)
         )
-        
-    def _prepare_for_attention(self, x_4d):
-        """ Chuyển đổi từ (B, C, H, W) sang (B, H*W, C) """
-        # (B, D, H, W) -> (B, D, H*W)
-        B, C, H, W = x_4d.shape
-        x_3d = x_4d.flatten(start_dim=2)
-        # (B, D, H*W) -> (B, H*W, D)
-        x_attn = x_3d.transpose(1, 2)
-        return x_attn, (B, C, H, W)
-    
-    def _recover_from_attention(self, x_attn, shape_4d):
-        """ Chuyển đổi từ (B, H*W, C) sang (B, C, H, W) """
-        B, C, H, W = shape_4d
-        # (B, H*W, C) -> (B, C, H*W)
-        x_3d = x_attn.transpose(1, 2)
-        # (B, C, H*W) -> (B, C, H, W)
-        x_4d = x_3d.view(B, C, H, W)
-        return x_4d
 
-    def forward(self, x_rgb, x_snr):
-        """
-        Args:
-            x_rgb (Tensor): RGB feature maps x_i (B, C, H, W)
-            x_snr (Tensor): SNR maps s_i (B, C, H, W)
-        """
-        # x_i_4d là (B, C, H, W), với C == D (d_model)
-        x_i_4d = x_rgb
-        
-        # 1. Projections (4D Conv)
-        Q_4d = self.q_proj(x_snr) # (B, D, H, W)
-        K_4d = self.k_proj(x_rgb) # (B, D, H, W)
-        V_4d = self.v_proj(x_rgb) # (B, D, H, W)
 
-        # 2. Chuẩn bị cho FSA (4D -> 3D)
-        Q_3d, shape_info = self._prepare_for_attention(Q_4d) # (B, S, D)
-        K_3d, _ = self._prepare_for_attention(K_4d)          # (B, S, D)
-        V_3d, _ = self._prepare_for_attention(V_4d)          # (B, S, D)
+    def forward(self, x_rgb, x_prior):
 
-        # 3. Fourier SNR-guided Attention (FSA)
-        F_3d = self.fsa(Q_3d, K_3d) # (B, S, D)
-        
-        # 4. Norm + Modulate (Giữ logic gốc)
-        attn_norm_3d = self.norm1(F_3d)
-        attn_3d = attn_norm_3d * V_3d # (B, S, D)
-        
-        # 5. Residual Connection 1
-        # Chuyển x_i sang 3D để cộng
-        x_i_3d, _ = self._prepare_for_attention(x_i_4d) # (B, S, D)
-        x_prime_3d = x_i_3d + attn_3d # (B, S, D)
-        
-        # 6. MLP Block (Công thức 5)
-        mlp_input_3d = self.norm2(x_prime_3d)
-        mlp_output_3d = self.mlp(mlp_input_3d)
-        
-        # 7. Residual Connection 2
-        x_out_3d = x_prime_3d + mlp_output_3d # (B, S, D)
-        
-        # 8. Chuyển về 4D
-        x_out_4d = self._recover_from_attention(x_out_3d, shape_info)
-        
-        return x_out_4d
+        # Đảm bảo đầu vào có số kênh là d_model
+        x_rgb = self.rgb_embed(x_rgb)
+        x_prior = self.prior_embed(x_prior)
+
+        B, C, H, W = x_rgb.shape
+        residual = x_rgb
+
+        # --- Block 1: Guided MDTA ---
+        # Cần chuyển về dạng (B, H, W, C) để dùng nn.LayerNorm chuẩn, rồi chuyển lại
+        x_norm = self.norm1(x_rgb.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        s_norm = self.norm1(x_prior.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+        # MDTA thực hiện trên 4D tensor
+        attn_out = self.attn(x_norm, s_norm)
+
+        # Residual connection 1
+        x = residual + attn_out
+
+        # --- Block 2: MLP (giữ nguyên logic cũ trên 3D/channel-last) ---
+        residual = x
+        # Reshape cho MLP: (B, C, H, W) -> (B, H, W, C)
+        x_channels_last = x.permute(0, 2, 3, 1)
+        x_norm = self.norm2(x_channels_last)
+        mlp_out = self.mlp(x_norm)
+
+
+        # Reshape lại về 4D: (B, H, W, C) -> (B, C, H, W)
+        mlp_out = mlp_out.permute(0, 3, 1, 2)
+
+        # Residual connection 2
+        x = residual + mlp_out
+        return x
 
 
 class PriorGuidedRE(nn.Module):
@@ -1326,7 +1314,7 @@ class PriorGuidedRE(nn.Module):
             if i < self.down_depth:
                 # FAST_Module yêu cầu ch_in == d_model
                 d_model = ch_in * 2 ** i
-                self.fast_modules.append(FAST_Module(ch_in=ch_in * 2 ** i, d_model=d_model))
+                self.fast_modules.append(FAST_Module_MDTA(ch_in=ch_in * 2 ** i, d_model=d_model))
 
 
     def forward(self, x, prior):
