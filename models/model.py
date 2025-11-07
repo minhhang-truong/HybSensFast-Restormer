@@ -1146,6 +1146,10 @@ class GuidedMDTA(nn.Module):
     """
     def __init__(self, dim, num_heads):
         super().__init__()
+
+        while dim % num_heads != 0 and num_heads > 1:
+            num_heads -= 1
+            
         self.num_heads = num_heads
         self.dim = dim
         self.head_dim = dim // num_heads
