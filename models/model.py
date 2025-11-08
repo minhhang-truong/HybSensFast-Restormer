@@ -1290,6 +1290,7 @@ class PriorGuidedRE(nn.Module):
         self.dr = nn.ModuleList()  # DetailRestorer
         self.downs = nn.ModuleList()
         self.prior_downs = nn.ModuleList()
+        self.prior_r = nn.ModuleList()
         self.up = nn.ModuleList()
         self.fusion = nn.ModuleList()
 
@@ -1311,6 +1312,17 @@ class PriorGuidedRE(nn.Module):
                 nn.PixelShuffle(2)
             ))
 
+            self.prior_r.append(
+                nn.Sequential(
+                    nn.Conv2d(self.ch_in * 2 ** i, self.ch_in * 2 ** i, 3, 1, 1, groups=self.ch_in * 2 ** i),
+                    nn.Conv2d(self.ch_in * 2 ** i, self.ch_in * 2 ** i, 1),
+                    nn.GELU(),
+                    nn.Conv2d(self.ch_in * 2 ** i, self.ch_in * 2 ** i, 3, 1, 1, groups=self.ch_in * 2 ** i),
+                    nn.Conv2d(self.ch_in * 2 ** i, self.ch_in * 2 ** i, 1),
+                    nn.GELU()
+                )
+            )
+
         for i in range(self.down_depth + 1):
             self.dr.append(DetailRestorer(self.ch_in * 2 ** i))
             self.fusion.append(ScaleHarmonizer(self.ch_in * 2 ** (i + 1), self.ch_in * 2 ** i))
@@ -1326,19 +1338,19 @@ class PriorGuidedRE(nn.Module):
         prior_levels = [] # Danh sách mới để lưu prior ở mọi cấp độ
 
         dr_res.append(self.dr[0](x))
-        prior_levels.append(prior) # Lưu prior gốc (cấp độ 0)
-
+        current_prior = prior
         #prior_low = prior
         for i, (down, prior_down) in enumerate(zip(self.downs, self.prior_downs)):
             low = down(dr_res[i])
             dr_res.append(self.dr[i + 1](low))
             #prior_low = prior_down(prior_low)
             # Downsample prior từ cấp độ trước và lưu lại
+            current_prior = self.prior_r[0](current_prior)
+            prior_levels.append(current_prior) # Lưu prior gốc (cấp độ 0)
             current_prior = prior_down(prior_levels[-1]) 
-            prior_levels.append(current_prior)
 
         # Lấy prior ở mức thấp nhất
-        prior_low = prior_levels[-1]
+        prior_low = current_prior
 
         fusion_res = []
 
