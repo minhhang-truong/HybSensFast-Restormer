@@ -75,7 +75,7 @@ def train():
     size = len(testloader)
 
     # Log gradient
-    grad_log_file = os.path.join(opt.LOG.LOG_DIR, opt.LOG.GRAD_LOG_FILE) 
+    grad_log_file = os.path.join(opt.LOG.LOG_DIR, opt.TRAINING.GRAD_LOG_FILE) 
     
     # Xóa file cũ nếu bắt đầu train lại từ đầu (tùy chọn)
     if accelerator.is_local_main_process and start_epoch == 1:
