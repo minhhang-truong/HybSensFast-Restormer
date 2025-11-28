@@ -84,6 +84,7 @@ class Config(object):
         self._C.TRAINING.PS_H = 512
         self._C.TRAINING.ORI = False
         self._C.TRAINING.LOG_FILE = 'log.txt'
+        self._C.TRAINING.GRAD_LOG_FILE = 'gradient_log.txt'
 
         self._C.TESTING = CN()
         self._C.TESTING.INPUT = 'input'
