@@ -25,6 +25,7 @@ TRAINING:
   SAVE_DIR: ''          # path to save models
   ORI: False
   LOG_FILE: ''
+  GRAD_LOG_FILE: ''
 
 TESTING:
   INPUT: 'input'

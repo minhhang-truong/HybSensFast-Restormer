@@ -45,3 +45,51 @@ def load_checkpoint(model, weights):
         new_state_dict[name] = value
     model.load_state_dict(new_state_dict)
 
+
+def check_grads(model, log_file_path, epoch, step):
+    # Tạo danh sách các thông báo để ghi một lần
+    messages = []
+    messages.append(f"\n[Epoch {epoch} - Step {step}] --- CHECKING GRADIENTS ---")
+    
+    has_nan = False
+    has_zero = False
+    has_exploding = False
+    
+    # Ngưỡng kiểm tra
+    threshold_vanishing = 1e-7
+    threshold_exploding = 10.0
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_max = param.grad.abs().max().item()
+            
+            # 1. Kiểm tra NaN
+            if torch.isnan(param.grad).any():
+                msg = f"NaN detected in: {name}"
+                messages.append(msg)
+                print(msg) # Vẫn in lỗi nghiêm trọng ra màn hình để biết ngay
+                has_nan = True
+            
+            # 2. Kiểm tra Vanishing
+            elif grad_max < threshold_vanishing:
+                msg = f"Vanishing (Max < {threshold_vanishing}): {name} | Max: {grad_max:.2e}"
+                messages.append(msg)
+                has_zero = True
+                
+            # 3. Kiểm tra Exploding
+            elif grad_max > threshold_exploding:
+                msg = f"Exploding (Max > {threshold_exploding}): {name} | Max: {grad_max:.2f}"
+                messages.append(msg)
+                has_exploding = True
+                
+    if not has_nan and not has_zero and not has_exploding:
+        messages.append("Gradients look healthy.")
+    
+    messages.append("--------------------------------------------------")
+
+    # GHI VÀO FILE
+    try:
+        with open(log_file_path, mode='a', encoding='utf-8') as f:
+            f.write('\n'.join(messages) + '\n')
+    except Exception as e:
+        print(f"Không thể ghi log gradient: {e}")

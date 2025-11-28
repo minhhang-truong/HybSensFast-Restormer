@@ -74,11 +74,22 @@ def train():
 
     size = len(testloader)
 
+    # Log gradient
+    grad_log_file = os.path.join(opt.LOG.LOG_DIR, opt.LOG.GRAD_LOG_FILE) 
+    
+    # Xóa file cũ nếu bắt đầu train lại từ đầu (tùy chọn)
+    if accelerator.is_local_main_process and start_epoch == 1:
+        # Kiểm tra folder log có tồn tại không trước khi check file
+        os.makedirs(opt.LOG.LOG_DIR, exist_ok=True) 
+        
+        if os.path.exists(grad_log_file):
+            os.remove(grad_log_file)
+
     # training
     for epoch in range(start_epoch, opt.OPTIM.NUM_EPOCHS + 1):
         model.train()
 
-        for _, data in enumerate(tqdm(trainloader, disable=not accelerator.is_local_main_process)):
+        for step, data in enumerate(tqdm(trainloader, disable=not accelerator.is_local_main_process)):
             inp = data[0].contiguous()
             tar = data[1]
 
@@ -94,6 +105,11 @@ def train():
 
             # backward
             accelerator.backward(train_loss)
+
+            # 2. GỌI HÀM KIỂM TRA & GHI LOG
+            if accelerator.is_local_main_process and step % 100 == 0:
+                check_grads(model, grad_log_file, epoch, step)
+
             optimizer_b.step()
 
         scheduler_b.step()
