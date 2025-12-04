@@ -65,9 +65,13 @@ def train():
 
     start_epoch = 1
 
-    trainloader, testloader = accelerator.prepare(trainloader, testloader)
+    '''trainloader, testloader = accelerator.prepare(trainloader, testloader)
     model = accelerator.prepare(model)
-    optimizer_b, scheduler_b = accelerator.prepare(optimizer_b, scheduler_b)
+    optimizer_b, scheduler_b = accelerator.prepare(optimizer_b, scheduler_b)'''
+
+    model, optimizer_b, trainloader, testloader, scheduler_b = accelerator.prepare(
+            model, optimizer_b, trainloader, testloader, scheduler_b
+        )
 
     best_epoch = 1
     best_psnr = 0
