@@ -1,17 +1,17 @@
 # GGuidedHybSensUIR (Enhanced with Restormer & Prior Fusion)
 
-This repository is an enhanced version of the **GuidedHybSensUIR** model. We have modified the original architecture by integrating **Restormer blocks** and a **multi-scale prior concatenation mechanism** within the U-Net stages to refine the restoration process.
+This repository is an enhanced version of the **GuidedHybSensUIR** model. We have modified the original architecture by integrating Restormer blocks and a multi-scale prior concatenation mechanism within the U-Net stages to refine the restoration process.
 
 ---
 
-## 🚀 Key Enhancements
+# 🚀 Key Enhancements
 This version introduces specific structural modifications to the original GuidedHybSensUIR:
 * **Restormer Integration:** We have integrated Restormer blocks within the U-Net architecture. By leveraging Multi-Dconv Head Transposed Attention (MDTA), the model better captures global context compared to standard convolutions.
 * **Prior-Guided Concatenation:** A `concat` strategy is implemented between the physical priors and the feature maps across different layers of the U-Net. This ensures that the prior information directly guides the feature extraction and reconstruction phases.
 * **Refined Color Balance:** These modifications lead to a slight improvement in color balance and stability in underwater scenes, helping to mitigate common color casts more effectively than the baseline.
 
 ---
-## 📜 Original Work
+# 📜 Original Work
 This project is built upon the research:
 [Underwater Image Restoration Through a Prior Guided Hybrid Sense Approach and Extensive Benchmark Analysis](https://ieeexplore.ieee.org/document/10824878)
 <div>
