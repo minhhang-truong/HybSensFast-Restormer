@@ -1,4 +1,4 @@
-# GGuidedHybSensUIR (Enhanced with Restormer & Prior Fusion)
+# GuidedHybSensUIR (Enhanced with Restormer & Prior Fusion)
 
 This repository is an enhanced version of the **GuidedHybSensUIR** model. We have modified the original architecture by integrating Restormer blocks and a multi-scale prior concatenation mechanism within the U-Net stages to refine the restoration process.
 
